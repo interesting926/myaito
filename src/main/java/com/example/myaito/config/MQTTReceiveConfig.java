@@ -1,5 +1,6 @@
 package com.example.myaito.config;
 
+import lombok.extern.slf4j.Slf4j;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -7,30 +8,40 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.integration.annotation.IntegrationComponentScan;
 import org.springframework.integration.annotation.ServiceActivator;
 import org.springframework.integration.channel.DirectChannel;
+import org.springframework.integration.core.MessageProducer;
 import org.springframework.integration.mqtt.core.DefaultMqttPahoClientFactory;
 import org.springframework.integration.mqtt.core.MqttPahoClientFactory;
-import org.springframework.integration.mqtt.outbound.MqttPahoMessageHandler;
+import org.springframework.integration.mqtt.inbound.MqttPahoMessageDrivenChannelAdapter;
+import org.springframework.integration.mqtt.support.DefaultPahoMessageConverter;
+import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.MessageHandler;
+import org.springframework.messaging.MessagingException;
 
+@Slf4j
 @Configuration
 @IntegrationComponentScan
-public class MqttSenderConfig {
-
+public class MQTTReceiveConfig {
     @Value("${mqtt.username}")
     private String username;
+
     @Value("${mqtt.password}")
     private String password;
+
     @Value("${mqtt.host}")
     private String hostUrl;
+
     @Value("${mqtt.clientinid}")
     private String clientId;
+
     @Value("${mqtt.topic}")
     private String defaultTopic;
+
     @Value("${mqtt.timeout}")
-    private int completionTimeout;
+    private int completionTimeout ;   //连接超时
+
     @Bean
-    public MqttConnectOptions getMqttConnectOptions(){
+    public MqttConnectOptions getReceiverMqttConnectOptions(){
         MqttConnectOptions mqttConnectOptions=new MqttConnectOptions();
         mqttConnectOptions.setCleanSession(true);
         mqttConnectOptions.setConnectionTimeout(10);
@@ -43,21 +54,41 @@ public class MqttSenderConfig {
         return mqttConnectOptions;
     }
     @Bean
-    public MqttPahoClientFactory mqttClientSendFactory() {
+    public MqttPahoClientFactory mqttClientReveiveFactory() {
         DefaultMqttPahoClientFactory factory = new DefaultMqttPahoClientFactory();
-        factory.setConnectionOptions(getMqttConnectOptions());
+        factory.setConnectionOptions(getReceiverMqttConnectOptions());
         return factory;
     }
+
+    //接收通道
     @Bean
-    @ServiceActivator(inputChannel = "mqttOutboundChannel")
-    public MessageHandler mqttOutbound() {
-        MqttPahoMessageHandler messageHandler =  new MqttPahoMessageHandler(clientId, mqttClientSendFactory());
-        messageHandler.setAsync(true);
-        messageHandler.setDefaultTopic(defaultTopic);
-        return messageHandler;
-    }
-    @Bean
-    public MessageChannel mqttOutboundChannel() {
+    public MessageChannel mqttInputChannel() {
         return new DirectChannel();
     }
+
+    //配置client,监听的topic
+    @Bean
+    public MessageProducer inbound() {
+        MqttPahoMessageDrivenChannelAdapter adapter =
+                new MqttPahoMessageDrivenChannelAdapter(clientId+"_inbound", mqttClientReveiveFactory(),
+                        defaultTopic);
+        adapter.setCompletionTimeout(completionTimeout);
+        adapter.setConverter(new DefaultPahoMessageConverter());
+        adapter.setQos(1);
+        adapter.setOutputChannel(mqttInputChannel());
+        return adapter;
+    }
+
+    //通过通道获取数据
+    @Bean
+    @ServiceActivator(inputChannel = "mqttInputChannel")
+    public MessageHandler handler() {
+        return new MessageHandler() {
+            @Override
+            public void handleMessage(Message<?> message) throws MessagingException {
+                log.info("主题：{}，消息接收到的数据：{}", message.getHeaders().get("mqtt_receivedTopic"), message.getPayload());
+            }
+        };
+    }
+
 }
